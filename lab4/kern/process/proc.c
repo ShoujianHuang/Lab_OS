@@ -103,7 +103,18 @@ alloc_proc(void) {
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
 
-
+        proc->state = PROC_UNINIT;
+        proc->pid = -1;
+        proc->runs = 0;
+        proc->kstack = NULL;
+        proc->need_resched = 0;
+        proc->parent = NULL;
+        proc->mm = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->tf = NULL;
+        proc->cr3 = boot_cr3;
+        proc->flags = 0;
+        memset(proc->name, 0, PROC_NAME_LEN+1);
     }
     return proc;
 }
@@ -172,6 +183,16 @@ proc_run(struct proc_struct *proc) {
         *   lcr3():                   Modify the value of CR3 register
         *   switch_to():              Context switching between two processes
         */
+
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);
+        {
+            current = proc;
+            lcr3(next->cr3);
+            switch_to(&(prev->context), &(next->context));
+        }
+        local_intr_restore(intr_flag);
        
     }
 }
@@ -298,8 +319,18 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-
     
+    if ((proc = alloc_proc()) == NULL)
+        goto fork_out;
+    if ((ret = setup_kstack(proc)) != 0)
+        goto fork_out;
+    if ((ret = copy_mm(clone_flags, proc)) != 0)
+        goto fork_out;
+    copy_thread(proc, stack, tf);
+    ret = proc->pid = get_pid();
+    hash_proc(proc);
+    list_add(&proc_list, &(proc->list_link));
+    wakeup_proc(proc);  
 
 fork_out:
     return ret;
@@ -392,4 +423,3 @@ cpu_idle(void) {
         }
     }
 }
-
